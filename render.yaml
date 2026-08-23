@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: voledge-options-analytics
+    runtime: docker
+    plan: starter
+    healthCheckPath: /_stcore/health
+    envVars:
+      - key: VOLEDGE_DATA_DIR
+        value: /var/data
+    disk:
+      name: voledge-data
+      mountPath: /var/data
+      sizeGB: 1
+
