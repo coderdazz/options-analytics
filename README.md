@@ -4,8 +4,8 @@ VolEdge is a local, analysis-first Streamlit terminal for US equity, ETF and
 index-option research. Its first production slice is deliberately narrow and
 reliable:
 
-**Alpaca data → canonical option chain → arbitrary option/vertical trade →
-market-anchored dynamic P&L and Greek scenarios.**
+**Manual or API market inputs → canonical option contracts → arbitrary option
+structure → local delta–gamma and market-anchored dynamic P&L scenarios.**
 
 It is research and decision-support software, not investment advice or an order
 router.
@@ -36,11 +36,17 @@ router.
   assumptions are selectable and labeled.
 - Dollar figures render in full with separators (`$50,000.00`), while IV,
   rates, dividend yields, returns and spreads are displayed as percentages.
+- The Trade Builder accepts manually copied price, bid/ask, IV, delta, gamma,
+  theta, vega and rho values without making any API call.
+- A trade can be sized by signed contract count or a capital budget. Contract
+  multipliers are explicit, so 100 US option contracts at $7 cost $70,000.
+- Moomoo and Alpaca are optional read-only quote providers; neither routes
+  orders.
 
 ## Run locally
 
 ```bash
-cd /Users/dazz/Desktop/strategies/toolkit
+cd "/Users/dazz/Desktop/Dev Projects/options-platform"
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -60,9 +66,49 @@ marks, not executable OPRA quotes. Real-time OPRA currently requires Alpaca's
 paid Algo Trader Plus market-data plan. The application is quote-only and does
 not construct an order client.
 
+### Which Alpaca API?
+
+Use Alpaca's **Trading API** account and market-data credentials for this
+personal research tool. Do not use the Broker API: that product is intended for
+broker-dealers, RIAs and applications that create and manage brokerage accounts
+for end users. VolEdge currently uses only market-data endpoints, so paper/live
+trading permissions are not needed and no orders are submitted.
+
+The free Basic plan is sufficient to test the integration, but its US option
+quotes are indicative rather than consolidated real-time OPRA. Manual Moomoo
+values are therefore often the better input for a real trade study when you do
+not want a paid Alpaca market-data subscription.
+
+### Optional Moomoo SG connection
+
+Moomoo data arrives through the desktop/local gateway **OpenD**, not through a
+key pasted into the app. Install the optional SDK separately so cloud demo
+deployments do not carry an unused dependency:
+
+```bash
+source .venv/bin/activate
+pip install -r requirements-moomoo.txt
+# Install and start OpenD, log in to your Moomoo account, then:
+MOOMOO_HOST=127.0.0.1 MOOMOO_PORT=11111 streamlit run app.py
+```
+
+In **Data & Settings**, select **Moomoo**, use a qualified symbol such as
+`US.AAPL`, choose an expiry range and press **Load option chain**. The provider
+creates only an `OpenQuoteContext`; it never creates a trade context. It loads
+the static option chain once, batches market snapshots in groups of up to 200,
+and preserves Moomoo bid, ask, IV and Greeks. Your Moomoo account must have the
+relevant quote entitlement. OpenD must remain running and logged in.
+
+An internet-hosted free Streamlit instance normally cannot connect directly to
+OpenD running on your laptop. Manual mode works anywhere. A future hosted
+Moomoo connection would require a secured, private network path to an always-on
+OpenD host; do not expose the OpenD port publicly.
+
 ## Workflow
 
-1. Load an underlying and expiry range from **Data & Settings**.
+1. For the lowest-friction workflow, open **Trade Builder** and copy an option's
+   mark, bid/ask, IV and Greeks from Moomoo or another broker. This makes no API
+   request. Alternatively load an option chain from **Data & Settings**.
 2. Inspect provider provenance and quality flags in **Market Overview**.
 3. Filter the professional **Option Chain** and add buy/sell legs.
 4. Open **Trade Builder**, choose an entry-fill convention, and compare Alpaca
@@ -71,6 +117,26 @@ not construct an order client.
    evolution.
 6. Size using full contractual maximum loss, not an assumed stop fill.
 7. Save positions and valuation snapshots under **Portfolio & Risk**.
+
+### Manual example: $7 option, 100 contracts
+
+For a current option mark of $7, delta 0.20, gamma 0.00034, quantity 100 and a
+standard multiplier of 100:
+
+```text
+premium paid = $7 × 100 contracts × 100 multiplier = $70,000
+new option mark ≈ 7 + 0.20×ΔS + 0.5×0.00034×ΔS²
+```
+
+For a $1 rise in the underlying, the estimated new mark is $7.20017 and MTM
+P&L is approximately $2,001.70. For a $10 rise, the local estimate is $9.017
+and P&L is approximately $20,170. The latter is much less reliable because
+delta and gamma themselves change as spot moves. Use the full dynamic scenario
+engine for larger moves, elapsed time and IV shocks.
+
+Be precise about units: **100 contracts** represent 10,000 underlying shares
+with a standard 100 multiplier. If you mean exposure to 100 shares, enter one
+contract.
 
 ## Repository layout
 

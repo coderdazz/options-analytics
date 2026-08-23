@@ -1,13 +1,23 @@
 from __future__ import annotations
 
+from datetime import date, timedelta
+from math import floor
+
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from ...analytics.scenarios import IVScenario, ScenarioAssumptions, scenario_grid
+from ...analytics.scenarios import (
+    IVScenario,
+    ScenarioAssumptions,
+    delta_gamma_price,
+    delta_gamma_trade_curve,
+    scenario_grid,
+)
 from ...analytics.trades import trade_from_contracts
-from ...data.contracts import FillConvention
+from ...data.contracts import FillConvention, OptionSide
+from ...data.manual import build_manual_option
 from ...pricing import black_scholes
 from ..formatting import display_frame, money, number, percent, metric_cards
 from ..layout import assumption_note, page_header
@@ -16,16 +26,16 @@ from ..layout import assumption_note, page_header
 def render(contracts: list) -> None:
     page_header("Trade builder & scenarios", "Build from executable quotes. Reprice from the market.",
                 "Create any same-underlying option combination. Entry uses an explicit fill convention; scenario marks are anchored to provider midpoints.")
+    _manual_leg_entry()
+    contracts = st.session_state.contracts
     by_symbol = {contract.symbol: contract for contract in contracts}
     st.session_state.trade_quantities = {
         symbol: quantity for symbol, quantity in st.session_state.trade_quantities.items()
         if symbol in by_symbol and quantity != 0
     }
-    if not st.session_state.trade_quantities:
-        _starter_trade(contracts)
     symbols = list(st.session_state.trade_quantities)
     if not symbols:
-        st.info("Add one or more contracts from Option Chain.")
+        st.info("Add a manual leg above, or add one or more contracts from Option Chain.")
         return
 
     with st.container(border=True):
@@ -54,10 +64,14 @@ def render(contracts: list) -> None:
                 "iv": st.column_config.NumberColumn(format="percent"),
             }, key="leg_editor",
         )
-        if st.button("Apply leg quantities"):
+        apply_col, clear_col = st.columns(2)
+        if apply_col.button("Apply leg quantities"):
             st.session_state.trade_quantities = {
                 str(row.symbol): int(row.quantity) for _, row in edited.iterrows() if int(row.quantity) != 0
             }
+            st.rerun()
+        if clear_col.button("Clear structure"):
+            st.session_state.trade_quantities = {}
             st.rerun()
 
     a, b, c = st.columns(3)
@@ -75,7 +89,7 @@ def render(contracts: list) -> None:
     rate = rate_pct / 100.0
     selections = [(by_symbol[s], q) for s, q in st.session_state.trade_quantities.items()]
     try:
-        trade = trade_from_contracts(contracts[0].underlying, selections, fill, name=name)
+        trade = trade_from_contracts(selections[0][0].underlying, selections, fill, name=name)
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -91,8 +105,8 @@ def render(contracts: list) -> None:
         ("Current midpoint value", money(trade.current_mid_value), "reference mark, not execution"),
         ("Maximum profit", max_profit, "expiry profile"),
         ("Maximum loss", max_loss, "size using full contractual loss"),
-        ("Vendor delta", number(vendor["delta"], 2), f"source: {contracts[0].provider}"),
-        ("Vendor vega / vol point", number(vendor["vega"], 2), f"source: {contracts[0].provider}"),
+        ("Vendor delta", number(vendor["delta"], 2), f"source: {trade.legs[0].contract.provider}"),
+        ("Vendor vega / vol point", number(vendor["vega"], 2), f"source: {trade.legs[0].contract.provider}"),
     ])
     if stats["breakevens"]:
         st.caption("Expiry breakeven(s): " + ", ".join(money(x) for x in stats["breakevens"]))
@@ -101,6 +115,42 @@ def render(contracts: list) -> None:
     display_frame(trade.legs_frame())
     if fill == FillConvention.MID:
         assumption_note("Midpoint entry is selected for comparison. It is not an executable-price assumption. Switch to Natural or Conservative before using the estimated P&L for a trading decision.")
+
+    st.markdown("### Entered delta–gamma MTM estimate")
+    reference_spot = trade.legs[0].contract.underlying_spot
+    move_left, move_right = st.columns([1, 2])
+    dollar_move = move_left.number_input(
+        "Underlying move ($)", min_value=float(-reference_spot + 0.01),
+        max_value=float(reference_spot), value=0.0,
+        step=max(round(reference_spot * 0.005, 2), 0.01), format="%.2f",
+    )
+    scenario_spot = reference_spot + dollar_move
+    local_value = sum(
+        delta_gamma_price(leg.contract, scenario_spot) * leg.quantity * leg.contract.multiplier
+        for leg in trade.legs
+    )
+    vendor = trade.vendor_greeks()
+    metric_cards([
+        ("Scenario underlying", money(scenario_spot), f"move {money(dollar_move)}"),
+        ("Estimated structure value", money(local_value), "entered delta + gamma"),
+        ("Estimated MTM P&L", money(local_value - trade.net_debit), "relative to selected entry fill"),
+        ("Dollar delta", money(vendor["delta"]), "approx. P&L for a $1 underlying move"),
+        ("Dollar gamma", money(vendor["gamma"]), "change in dollar delta per $1 move"),
+    ])
+    local_curve = delta_gamma_trade_curve(trade, np.linspace(-0.20, 0.20, 81))
+    local_fig = px.line(
+        local_curve, x="spot", y="pnl",
+        title="Local MTM P&L from entered delta and gamma",
+    )
+    local_fig.update_xaxes(tickprefix="$", separatethousands=True, title="Underlying price")
+    local_fig.update_yaxes(tickprefix="$", separatethousands=True, title="Estimated MTM P&L")
+    local_fig.add_hline(y=0, line_dash="dash", line_color="#8FA4B8")
+    move_right.plotly_chart(local_fig)
+    assumption_note(
+        "Local estimate per option unit: new mark ≈ current mark + Δ×ΔS + ½×Γ×ΔS². "
+        "It holds time and IV constant, then scales by signed contracts × contract multiplier. "
+        "Use it as a small-move sanity check; use the dynamic scenarios below for larger spot, time and IV changes."
+    )
 
     st.markdown("### Current vendor values vs model comparison")
     comparison = []
@@ -175,6 +225,82 @@ def render(contracts: list) -> None:
     fig.for_each_annotation(lambda annotation: annotation.update(text=annotation.text.split("=")[-1].upper()))
     st.plotly_chart(fig)
     assumption_note(f"IV mode: {iv_mode}. Scenario prices begin at the provider midpoint and add the Black–Scholes modeled change. Current vendor Greeks remain authoritative; future Greeks are model estimates. Sticky-delta is a local-skew approximation until the Phase 2 volatility surface is fitted.")
+
+
+def _manual_leg_entry() -> None:
+    with st.expander("Enter an option manually — no API call", expanded=True):
+        st.caption(
+            "Copy the mark, bid/ask, IV and Greeks from your broker. IV is entered as a percentage; "
+            "prices and Greeks are stored exactly as entered."
+        )
+        row1 = st.columns(5)
+        underlying = row1[0].text_input("Underlying", "AAPL", key="manual_underlying").strip().upper()
+        side_label = row1[1].selectbox("Option type", ["Call", "Put"], key="manual_side")
+        spot = row1[2].number_input("Underlying spot", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="manual_spot")
+        strike = row1[3].number_input("Strike", min_value=0.01, value=100.0, step=1.0, format="%.2f", key="manual_strike")
+        expiry = row1[4].date_input("Expiry", date.today() + timedelta(days=30), min_value=date.today(), key="manual_expiry")
+
+        row2 = st.columns(6)
+        mark = row2[0].number_input("Mark / last", min_value=0.0, value=7.0, step=0.05, format="%.4f", key="manual_mark")
+        bid = row2[1].number_input("Bid", min_value=0.0, value=7.0, step=0.05, format="%.4f", key="manual_bid")
+        ask = row2[2].number_input("Ask", min_value=0.0, value=7.0, step=0.05, format="%.4f", key="manual_ask")
+        iv_pct = row2[3].number_input("Implied volatility (%)", min_value=0.01, value=30.0, step=1.0, format="%.2f", key="manual_iv")
+        multiplier = row2[4].number_input("Contract multiplier", min_value=1.0, value=100.0, step=1.0, format="%.0f", key="manual_multiplier")
+        symbol_default = f"{underlying or 'OPTION'}-MANUAL"
+        symbol = row2[5].text_input("Contract label / symbol", symbol_default, key="manual_symbol")
+
+        row3 = st.columns(5)
+        delta = row3[0].number_input("Delta", value=0.20, step=0.01, format="%.6f", key="manual_delta")
+        gamma = row3[1].number_input("Gamma", value=0.00034, step=0.0001, format="%.6f", key="manual_gamma")
+        theta = row3[2].number_input("Theta / day", value=0.0, step=0.01, format="%.6f", key="manual_theta")
+        vega = row3[3].number_input("Vega / vol point", value=0.0, step=0.01, format="%.6f", key="manual_vega")
+        rho = row3[4].number_input("Rho", value=0.0, step=0.01, format="%.6f", key="manual_rho")
+
+        sizing = st.radio("Size by", ["Contracts", "Capital budget"], horizontal=True, key="manual_sizing")
+        sizing_left, sizing_right, sizing_note = st.columns([1, 1, 2])
+        direction = sizing_left.selectbox("Direction", ["Buy", "Sell"], key="manual_direction")
+        reference_price = ask if direction == "Buy" else bid
+        if reference_price <= 0:
+            reference_price = mark
+        if sizing == "Contracts":
+            quantity = int(sizing_right.number_input("Number of contracts", min_value=1, value=100, step=1, key="manual_quantity"))
+            capital = quantity * reference_price * multiplier
+        else:
+            budget = sizing_right.number_input("Capital budget", min_value=0.0, value=50_000.0, step=1_000.0, format="%.2f", key="manual_budget")
+            unit_cost = reference_price * multiplier
+            quantity = floor(budget / unit_cost) if unit_cost > 0 else 0
+            capital = quantity * unit_cost
+        sizing_note.markdown(
+            f"**Calculated size:** {quantity:,} contract{'s' if quantity != 1 else ''}  \n"
+            f"**Premium/notional at reference price:** {money(capital)}  \n"
+            f"{quantity:,} × {money(reference_price, 4)} × {multiplier:,.0f}"
+        )
+
+        if st.button("Add manual leg to structure", type="primary", disabled=quantity < 1):
+            try:
+                contract = build_manual_option(
+                    underlying=underlying, symbol=symbol,
+                    option_type=OptionSide.CALL if side_label == "Call" else OptionSide.PUT,
+                    strike=strike, expiry=expiry, underlying_spot=spot,
+                    bid=bid, ask=ask, last=mark, implied_volatility=iv_pct / 100.0,
+                    delta=delta, gamma=gamma, theta=theta, vega=vega, rho=rho,
+                    multiplier=multiplier,
+                )
+                same_underlying = [
+                    item for item in st.session_state.contracts
+                    if item.underlying == contract.underlying and item.symbol != contract.symbol
+                ]
+                st.session_state.contracts = same_underlying + [contract]
+                signed_quantity = quantity if direction == "Buy" else -quantity
+                if not same_underlying:
+                    st.session_state.trade_quantities = {}
+                st.session_state.trade_quantities[contract.symbol] = signed_quantity
+                st.session_state.underlying = contract.underlying
+                st.session_state.provider_name = "Manual"
+                st.session_state.quote_status = "Manual inputs · no market-data call"
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
 
 def _starter_trade(contracts: list) -> None:

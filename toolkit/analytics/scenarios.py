@@ -58,6 +58,45 @@ def _current_mark(contract: OptionContract) -> float:
     return float(mark)
 
 
+def delta_gamma_price(contract: OptionContract, scenario_spot: float) -> float:
+    """Estimate a new option mark with a second-order local spot expansion.
+
+    ``dV = delta*dS + 0.5*gamma*dS^2``. This deliberately excludes time and
+    volatility changes and is best treated as a small-move sanity check.
+    """
+    if contract.greeks.delta is None or contract.greeks.gamma is None:
+        raise ValueError(f"{contract.symbol} needs delta and gamma for the local estimate.")
+    scenario_spot = float(scenario_spot)
+    if not np.isfinite(scenario_spot) or scenario_spot <= 0:
+        raise ValueError("Scenario spot must be positive.")
+    move = scenario_spot - contract.underlying_spot
+    estimate = (_current_mark(contract) + contract.greeks.delta * move
+                + 0.5 * contract.greeks.gamma * move * move)
+    return float(max(0.0, estimate))
+
+
+def delta_gamma_trade_curve(
+    trade: Trade, spot_returns: list[float] | np.ndarray
+) -> pd.DataFrame:
+    """Return local delta-gamma MTM estimates for every leg in a structure."""
+    rows: list[dict[str, float | str]] = []
+    reference_spot = trade.legs[0].contract.underlying_spot
+    for spot_return in spot_returns:
+        scenario_spot = reference_spot * (1 + float(spot_return))
+        market_value = 0.0
+        for leg in trade.legs:
+            price = delta_gamma_price(leg.contract, scenario_spot)
+            market_value += price * leg.quantity * leg.contract.multiplier
+        rows.append({
+            "spot_return": float(spot_return),
+            "spot": float(scenario_spot),
+            "market_value": float(market_value),
+            "pnl": float(market_value - trade.net_debit),
+            "method": "Entered delta-gamma (local)",
+        })
+    return pd.DataFrame(rows)
+
+
 def revalue_contract(contract: OptionContract, assumptions: ScenarioAssumptions) -> dict[str, float]:
     scenario_spot = max(0.01, contract.underlying_spot * (1 + assumptions.spot_return))
     current_t = max(contract.dte / 365.0, 1 / (365 * 24))
