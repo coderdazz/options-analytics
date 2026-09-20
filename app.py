@@ -7,7 +7,9 @@ import streamlit as st
 from toolkit.config import Settings
 from toolkit.storage import Repository
 from toolkit.ui.layout import apply_layout
-from toolkit.ui.pages import data_settings, market_overview, option_chain, portfolio_risk, trade_builder
+from toolkit.ui.pages import (
+    data_settings, market_overview, option_chain, option_paths, portfolio_risk, trade_builder,
+)
 from toolkit.ui.state import initialize_state
 
 ROOT = Path(__file__).resolve().parent
@@ -31,7 +33,10 @@ with st.sidebar:
     st.caption("OPTIONS DECISION WORKBENCH")
     page = st.radio(
         "Workspace",
-        ["Market Overview", "Option Chain", "Trade Builder", "Portfolio & Risk", "Data & Settings"],
+        [
+            "Market Overview", "Option Chain", "Trade Builder", "Option Path Lab",
+            "Portfolio & Risk", "Data & Settings",
+        ],
         label_visibility="collapsed",
     )
     st.divider()
@@ -48,6 +53,8 @@ elif page == "Option Chain":
     option_chain.render(contracts)
 elif page == "Trade Builder":
     trade_builder.render(contracts)
+elif page == "Option Path Lab":
+    option_paths.render(contracts)
 elif page == "Portfolio & Risk":
     portfolio_risk.render(repository())
 else:

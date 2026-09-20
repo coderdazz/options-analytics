@@ -14,6 +14,7 @@ def initialize_state() -> None:
         "provider_name": "Demo",
         "contracts": [],
         "trade_quantities": {},
+        "selected_contract_symbol": None,
         "quote_status": "Demo market data",
     }
     for key, value in defaults.items():
@@ -28,4 +29,3 @@ def initialize_state() -> None:
 
 def contracts() -> list[OptionContract]:
     return st.session_state.contracts
-

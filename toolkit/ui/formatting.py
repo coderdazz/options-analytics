@@ -52,9 +52,13 @@ def display_frame(frame: pd.DataFrame, *, height: int | None = None) -> None:
         lower = str(col).lower()
         if lower in {"iv", "implied_volatility", "spread_pct", "moneyness", "return", "spot_return", "iv_shift"}:
             formatted[col] = formatted[col].map(lambda x: percent(x) if pd.notna(x) else "—")
-        elif lower in {"bid", "ask", "mid", "last", "price", "entry_price", "model_price", "scenario_price", "intrinsic", "extrinsic", "market_value", "pnl"}:
+        elif lower in {
+            "bid", "ask", "mid", "last", "price", "spot", "underlying_spot",
+            "entry_price", "model_price", "scenario_price", "intrinsic", "extrinsic",
+            "market_value", "pnl", "mtm_pnl", "daily_pnl",
+        }:
             formatted[col] = formatted[col].map(lambda x: money(x) if pd.notna(x) else "—")
-        elif lower in {"volume", "open_interest", "quantity", "dte"}:
+        elif lower in {"volume", "open_interest", "quantity", "dte", "remaining_dte", "day", "days_forward"}:
             formatted[col] = formatted[col].map(lambda x: integer(x) if pd.notna(x) else "—")
         elif lower in {"delta", "gamma", "theta", "vega", "rho", "probability_like_delta"}:
             formatted[col] = formatted[col].map(lambda x: number(x, 4) if pd.notna(x) else "—")

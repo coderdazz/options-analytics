@@ -42,6 +42,9 @@ router.
   multipliers are explicit, so 100 US option contracts at $7 cost $70,000.
 - Moomoo and Alpaca are optional read-only quote providers; neither routes
   orders.
+- The Option Path Lab calibrates one selected contract to its current market
+  mark and shows pre-expiry price and Greek evolution through ordered spot/time
+  paths.
 
 ## Run locally
 
@@ -115,8 +118,41 @@ OpenD host; do not expose the OpenD port publicly.
    with Black–Scholes without forcing reconciliation.
 5. Inspect spot P&L, price/time and price/IV heatmaps, and delta/gamma/theta/vega
    evolution.
-6. Size using full contractual maximum loss, not an assumed stop fill.
-7. Save positions and valuation snapshots under **Portfolio & Risk**.
+6. Open **Option Path Lab** for a single-contract spot sweep, time sweep or
+   user-entered daily spot/IV path. The charts focus on option MTM rather than
+   exercise payoff.
+7. Size using full contractual maximum loss, not an assumed stop fill.
+8. Save positions and valuation snapshots under **Portfolio & Risk**.
+
+### Path calibration and IV assumptions
+
+For a selected Moomoo, Alpaca, demo or manually entered contract, the path
+engine reads the current spot, market midpoint/mark, vendor IV and Greeks, DTE
+and contract terms. It first solves for the Black–Scholes IV that reproduces
+the market option price. If no European implied-volatility solution exists, it
+uses vendor IV plus a clearly labelled additive price offset that decays to zero
+at expiry.
+
+The current vendor Greeks are shown as observed anchor points. Projected Greeks
+are model estimates; the app does not force Black–Scholes delta, gamma, vega and
+theta to equal vendor values after fitting only one parameter to price.
+
+Available path assumptions are:
+
+- **Constant IV:** the calibrated IV is unchanged.
+- **Parallel IV shift:** add a fixed number of volatility points.
+- **Sticky strike:** preserve the selected strike's IV. For one fixed contract
+  this is numerically the same as constant IV until a fitted surface exists.
+- **Sticky delta:** use the labelled local-skew approximation already present
+  in the scenario engine.
+- **Custom IV path:** enter IV by future day; intermediate days are linearly
+  interpolated.
+
+The spot sweep displays price, delta, gamma and vega for today, +1d, +3d and
++5d. The time sweep plots the same measures across remaining DTE for selected
+spot levels. The custom path additionally displays underlying price, cumulative
+MTM P&L and theta. At expiry the price converges to intrinsic value; all earlier
+points are pre-expiry mark-to-market projections.
 
 ### Manual example: $7 option, 100 contracts
 

@@ -72,7 +72,8 @@ def render(contracts: list) -> None:
     quantity = d.number_input("Contracts", 1, 10_000, 1)
     if st.button("Add selected leg", type="primary"):
         st.session_state.trade_quantities[symbol] = int(quantity) * (1 if action == "BUY" else -1)
-        st.success("Leg added. Open Trade Builder to inspect entry and scenarios.")
+        st.session_state.selected_contract_symbol = symbol
+        st.success("Leg added. Open Trade Builder or Option Path Lab to inspect it.")
 
 
 def _contract_label(frame: pd.DataFrame, symbol: str) -> str:
